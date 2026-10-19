@@ -1,5 +1,5 @@
 /*
- * My Torrents 1.0.0 — standalone Lampa plugin (ES5).
+ * My Torrents 1.1.0 — standalone Lampa plugin (ES5).
  * API checked against TorrServer MatriX.137 and public Lampa source.
  * Apple TV TestFlight execution has NOT been verified.
  * No remote dependencies, parser, torrent add/remove, or settings changes.
@@ -9,14 +9,55 @@
 
     // Change only this value if the local server address changes.
     var SERVER_URL = 'http://192.168.1.98:8090';
+    var VERSION = '1.1.0';
     var TITLE = 'Мои торренты';
     var KEY = '__lampa_my_torrents_137';
     var VIDEO = /\.(mkv|mp4|m4v|mov|avi|ts|m2ts|mts|webm|mpg|mpeg|m2v|vob|wmv|flv|ogv|3gp|3g2|divx)$/i;
-    var L, $, attempts = 0;
+    var L, $, attempts = 0, timer, noticeTimer, checkTimer;
+    var followed, appReady = false, returnController = 'menu', reported = false;
+    var ICON = '<svg width="32" height="32" viewBox="0 0 32 32" fill="none" xmlns="http://www.w3.org/2000/svg">' +
+        '<rect x="3" y="5" width="26" height="22" rx="3" stroke="currentColor" stroke-width="2"/>' +
+        '<path d="M13 11l9 5-9 5V11z" fill="currentColor"/></svg>';
 
-    if (w[KEY]) return;
-    var state = w[KEY] = { version: '1.0.0', ready: false, lastError: '' };
+    if (w[KEY] && w[KEY].version === VERSION) {
+        if (w[KEY].refresh) w[KEY].refresh();
+        return;
+    }
+    if (w[KEY] && w[KEY].dispose) w[KEY].dispose();
+    var state = w[KEY] = { version: VERSION, ready: false, menu: false, settings: false, lastError: '' };
     SERVER_URL = SERVER_URL.replace(/\/+$/, '');
+
+    // Visible proof of JS execution, even when this build lacks Lampa/jQuery.
+    function notify(message) {
+        state.lastNotice = message;
+        var doc = w.document;
+        var old = doc && doc.getElementById('my-ts137-notice');
+        if (old && old.parentNode) old.parentNode.removeChild(old);
+        if (w.console && w.console.log) w.console.log('[My Torrents]', message);
+        if (L && L.Noty && typeof L.Noty.show === 'function') {
+            try { L.Noty.show(message, { time: 12000 }); return; } catch (e) { /* UI may still be starting. */ }
+        }
+        if (!doc || !doc.body) return;
+        var node = doc.createElement('div');
+        node.id = 'my-ts137-notice';
+        node.textContent = message;
+        node.style.cssText = 'position:fixed;top:24px;left:5%;right:5%;z-index:2147483647;' +
+            'padding:16px;background:#171717;color:white;font:22px sans-serif;pointer-events:none;';
+        doc.body.appendChild(node);
+        w.clearTimeout(noticeTimer);
+        noticeTimer = w.setTimeout(function () { if (node.parentNode) node.parentNode.removeChild(node); }, 12000);
+    }
+
+    function diagnostics() {
+        var button = $ && $('.menu__item[data-action="my_ts137"]');
+        return 'MYTS-DIAG ' + VERSION + ': Lampa=' + (L ? 'да' : 'нет') +
+            ', jQuery=' + (typeof $ === 'function' ? 'да' : 'нет') +
+            ', меню=' + (state.menu ? 'да' : 'нет') +
+            ', скрыто=' + (button && button.hasClass('hidden') ? 'да' : 'нет') +
+            ', настройки=' + (state.settings ? 'да' : 'нет') +
+            ', Player=' + (L && L.Player && typeof L.Player.play === 'function' ? 'да' : 'нет') +
+            ', интерфейс=' + (L && L.Manifest ? L.Manifest.app_version || '?' : '?');
+    }
 
     function escapeHTML(value) {
         return String(value == null ? '' : value).replace(/[&<>"']/g, function (c) {
@@ -37,7 +78,7 @@
     }
 
     function backToMenu() {
-        L.Controller.toggle('menu');
+        L.Controller.toggle(returnController);
     }
 
     function errorBox(message, retry, back) {
@@ -146,6 +187,12 @@
     }
 
     function openTorrents() {
+        if (!L.Select || typeof L.Select.show !== 'function' || typeof L.Select.close !== 'function' ||
+            !L.Controller || typeof L.Controller.toggle !== 'function' || typeof L.Reguest !== 'function') {
+            state.lastError = 'MYTS-API: в этой сборке недоступны Select, Controller или Reguest.';
+            notify(state.lastError + ' ' + diagnostics());
+            return;
+        }
         request('/torrents', { action: 'list' }, 15000, function (json) {
             if (!Array.isArray(json)) {
                 errorBox('MYTS-LIST: ожидался массив раздач.', openTorrents, backToMenu);
@@ -206,37 +253,127 @@
         }, retry, back);
     }
 
-    function boot() {
-        L = w.Lampa;
-        $ = w.jQuery || w.$;
-        if (!L || !$ || !w.appready || !$('.menu .menu__list').length) {
-            if (++attempts < 240) w.setTimeout(boot, 250);
-            else {
-                state.lastError = 'MYTS-INIT: за 60 секунд не найден готовый интерфейс Lampa.';
-                if (w.console && w.console.warn) w.console.warn('[My Torrents]', state.lastError);
-                if (L && L.Noty) L.Noty.show(state.lastError);
-            }
-            return;
-        }
-        if (!L.Select || typeof L.Select.show !== 'function' || typeof L.Select.close !== 'function' ||
-            !L.Player || typeof L.Player.play !== 'function' ||
-            !L.Controller || typeof L.Controller.toggle !== 'function' || typeof L.Reguest !== 'function') {
-            state.lastError = 'MYTS-INIT: эта сборка не предоставляет нужные API Lampa.';
-            if (L.Noty) L.Noty.show(state.lastError);
-            return;
-        }
-        if (!$('.menu [data-action="my_ts137"]').length) {
-            var button = $('<li class="menu__item selector" data-action="my_ts137">' +
-                '<div class="menu__ico"><svg width="32" height="32" viewBox="0 0 32 32" fill="none" xmlns="http://www.w3.org/2000/svg">' +
-                '<rect x="3" y="5" width="26" height="22" rx="3" stroke="currentColor" stroke-width="2"/>' +
-                '<path d="M13 11l9 5-9 5V11z" fill="currentColor"/></svg></div>' +
-                '<div class="menu__text">' + TITLE + '</div></li>');
-            button.on('hover:enter', openTorrents);
-            $('.menu .menu__list').eq(0).append(button);
-        }
-        state.ready = true;
-        if (w.console && w.console.log) w.console.log('[My Torrents] 1.0.0 ready');
+    function enter(controller) {
+        returnController = controller;
+        openTorrents();
     }
 
+    function registerSettings() {
+        var api = L && L.SettingsApi;
+        if (state.settings || !api || !api.addComponent || !api.addParam) return;
+        api.addComponent({ component: 'my_ts137', name: TITLE, icon: ICON });
+        api.addParam({
+            component: 'my_ts137',
+            param: { name: 'my_ts137_open', type: 'button' },
+            field: { name: 'Открыть мои торренты', description: 'Плагин ' + VERSION },
+            onRender: function (item) {
+                item.on('hover:enter', function () { enter('settings_component'); });
+            }
+        });
+        api.addParam({
+            component: 'my_ts137',
+            param: { name: 'my_ts137_diagnostics', type: 'button' },
+            field: { name: 'Диагностика ' + VERSION, description: 'Показать доступные API и состояние меню' },
+            onRender: function (item) { item.on('hover:enter', function () { notify(diagnostics()); }); }
+        });
+        state.settings = true;
+    }
+
+    function menuList(body) {
+        if (typeof $ !== 'function') return null;
+        var list;
+        if (body && typeof body.find === 'function') list = body.find('.menu__list').eq(0);
+        if ((!list || !list.length) && L && L.Menu && typeof L.Menu.render === 'function') {
+            try {
+                var root = L.Menu.render();
+                if (root) list = $(root).find('.menu__list').eq(0);
+            } catch (e) { /* Menu has not been initialized yet. */ }
+        }
+        if (!list || !list.length) list = $('.menu .menu__list').eq(0);
+        if (!list.length) list = $('.menu__list').eq(0);
+        return list.length ? list : null;
+    }
+
+    function attachMenu(list) {
+        if (!list) return false;
+        if (!list.find('[data-action="my_ts137"]').length) {
+            var button = $('<li class="menu__item selector" data-action="my_ts137">' +
+                '<div class="menu__ico">' + ICON + '</div><div class="menu__text">' + TITLE + '</div></li>');
+            button.on('hover:enter', function () { enter('menu'); });
+            // Use Lampa's own menu insertion first; fall back to the discovered list.
+            if (L.Menu && typeof L.Menu.addElement === 'function') {
+                try { L.Menu.addElement(button); } catch (e) { /* Use list below. */ }
+            }
+            if (!list.find('[data-action="my_ts137"]').length) list.append(button);
+        }
+        state.menu = true;
+        state.ready = true;
+        if (!reported) {
+            reported = true;
+            // The menu editor applies saved visibility after a delay.
+            checkTimer = w.setTimeout(function () {
+                var hidden = list.find('[data-action="my_ts137"]').hasClass('hidden');
+                notify(hidden ? 'MYTS-HIDDEN ' + VERSION + ': пункт скрыт. Откройте настройки → Мои торренты.' :
+                    'MYTS-MENU ' + VERSION + ': пункт «Мои торренты» добавлен.');
+            }, 1000);
+        }
+        return true;
+    }
+
+    function onApp(event) {
+        if (event.type === 'ready') {
+            appReady = true;
+            reported = false;
+            w.clearTimeout(checkTimer);
+            boot();
+        }
+    }
+
+    function onMenu(event) {
+        if (event.type === 'start' || event.type === 'end' || event.type === 'toggle') boot(event.body);
+    }
+
+    function boot(body) {
+        if (state.disposed) return;
+        w.clearTimeout(timer);
+        L = w.Lampa;
+        $ = w.jQuery || w.$;
+        try {
+            if (L && L.Listener && L.Listener !== followed && typeof L.Listener.follow === 'function') {
+                followed = L.Listener;
+                followed.follow('app', onApp);
+                followed.follow('menu', onMenu);
+            }
+            var list = menuList(body);
+            // A real menu, or the app's ready event, is sufficient. A fork need
+            // not expose window.appready to register this plugin's entry points.
+            if (L && (w.appready || appReady || list)) {
+                try { registerSettings(); } catch (settingsError) {
+                    state.settingsError = String(settingsError.message || settingsError);
+                }
+            }
+            if (L && attachMenu(list)) return;
+        } catch (e) {
+            state.lastError = 'MYTS-INIT ' + VERSION + ': ' + String(e.message || e);
+        }
+        if (++attempts < 240) timer = w.setTimeout(boot, 250);
+        else {
+            state.lastError = (state.settings ? 'MYTS-SETTINGS: откройте настройки → Мои торренты. ' : 'MYTS-INIT: ') + diagnostics();
+            notify(state.lastError);
+        }
+    }
+
+    state.refresh = boot;
+    state.dispose = function () {
+        state.disposed = true;
+        w.clearTimeout(timer);
+        w.clearTimeout(noticeTimer);
+        w.clearTimeout(checkTimer);
+        if (followed && typeof followed.remove === 'function') {
+            followed.remove('app', onApp);
+            followed.remove('menu', onMenu);
+        }
+    };
+    notify('MYTS-JS ' + VERSION + ': код плагина запущен.');
     boot();
 })(window);

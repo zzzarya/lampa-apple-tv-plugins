@@ -1,17 +1,25 @@
-**Мои торренты — плагин Lampa 1.0.0**
+**Мои торренты — плагин Lampa 1.1.0**
 
-Файл: [my-torrents.js](my-torrents.js). Адрес уже задан.
+Файл: [my-torrents-1.1.js](my-torrents-1.1.js). Адрес уже задан.
 Путь: боковое меню → «Мои торренты» → раздача → видеофайл → штатный вызов плеера Lampa.
 Сторонние библиотеки, поиск и Jackett не нужны.
 
-Проверено 19.10.2026: реальный сервер отвечает `MatriX.137`, отдаёт две раздачи и десять видеофайлов в проверенной раздаче. Пройдены девять проверок логики и API, включая отмену, возврат, ошибки и формирование ссылки на выбранный файл. Сетевой модуль взят из исходников Lampa; интерфейс и видеоплеер в проверках заменены имитацией. **Запуск плагина и воспроизведение на вашей TestFlight-сборке tvOS пока не проверены.**
+В версии 1.1.0 пункт меню больше не зависит от наличия API плеера и флага `window.appready`. Используются события готовности и API меню Lampa, добавлены запасной вход **Настройки → Мои торренты** и видимые сообщения `MYTS-*`. Сохранённое скрытие пункта в редакторе меню не сбрасывается.
+
+Пройдены 14 проверок, включая настоящий DOM, jQuery и исходные модули меню, редактора меню и сети Lampa. Окно выбора и видеоплеер в тестах заменены имитацией. API реального `MatriX.137` был проверен при разработке 1.0.0; повторная живая проверка 1.1.0 не завершена, поскольку сервер в момент проверки недоступен. **На Lampa MX 0.2 (build 610) новая версия пока не проверена.**
+
+**Обновление с 1.0.0**
+
+Удалите прежнюю запись плагина и добавьте новый адрес:
+[https://zzzarya.github.io/lampa-apple-tv-plugins/my-torrents-1.1.js](https://zzzarya.github.io/lampa-apple-tv-plugins/my-torrents-1.1.js).
+Полностью закройте и снова запустите Lampa MX. Новый путь файла позволяет отличить версию 1.1.0 от старой копии в кэше. Должно появиться сообщение с номером `1.1.0`. Если боковой пункт отсутствует, проверьте **Настройки → Мои торренты → Диагностика 1.1.0**.
 
 **HTTPS-хостинг: GitHub Pages**
 
-1. Репозиторий: [zzzarya/lampa-apple-tv-plugins](https://github.com/zzzarya/lampa-apple-tv-plugins). Файлы `my-torrents.js` и `README.md` должны находиться в корне ветки `main`.
+1. Репозиторий: [zzzarya/lampa-apple-tv-plugins](https://github.com/zzzarya/lampa-apple-tv-plugins). Файлы `my-torrents.js`, `my-torrents-1.1.js` и `README.md` находятся в корне ветки `main`. Оба JS-файла содержат одну версию; устанавливать нужно только один.
 2. Откройте **Settings → Pages → Build and deployment → Source: Deploy from a branch**. Выберите `main` и `/ (root)`, сохраните.
-3. После успешной публикации адрес плагина: [https://zzzarya.github.io/lampa-apple-tv-plugins/my-torrents.js](https://zzzarya.github.io/lampa-apple-tv-plugins/my-torrents.js).
-4. Откройте адрес на Mac: он должен отдавать JavaScript, начинающийся с комментария `My Torrents 1.0.0`, без страницы GitHub, входа в аккаунт или ошибки 404. Для своего хостинга нужны HTTPS с доверенным сертификатом и MIME-тип `application/javascript` либо `text/javascript`.
+3. После успешной публикации адрес плагина: [https://zzzarya.github.io/lampa-apple-tv-plugins/my-torrents-1.1.js](https://zzzarya.github.io/lampa-apple-tv-plugins/my-torrents-1.1.js).
+4. Откройте адрес на Mac: он должен отдавать JavaScript, начинающийся с комментария `My Torrents 1.1.0`, без страницы GitHub, входа в аккаунт или ошибки 404. Для своего хостинга нужны HTTPS с доверенным сертификатом и MIME-тип `application/javascript` либо `text/javascript`.
 
 GitHub описывает [публикацию Pages](https://docs.github.com/en/pages/getting-started-with-github-pages/creating-a-github-pages-site) и [HTTPS](https://docs.github.com/en/pages/getting-started-with-github-pages/securing-your-github-pages-site-with-https). Публикация изменений может занять до десяти минут.
 
@@ -19,7 +27,7 @@ GitHub описывает [публикацию Pages](https://docs.github.com/e
 
 1. В Lampa откройте настройки плагинов/расширений; название пункта зависит от сборки.
 2. Отключите прежний неработающий `my_ts.js`, добавьте HTTPS-адрес нового файла и полностью перезапустите Lampa.
-3. Откройте боковое меню → **Мои торренты**. Выберите раздачу, затем видеофайл. Первое получение метаданных может занять до минуты.
+3. Откройте боковое меню → **Мои торренты** либо **Настройки → Мои торренты → Открыть мои торренты**. Выберите раздачу, затем видеофайл. Первое получение метаданных может занять до минуты.
 4. Плагин вызывает `Lampa.Player.play()` и использует выбранный в Lampa плеер. Если требуется встроенный плеер приложения, выберите его в настройках Lampa; названия вариантов на вашей сборке не подтверждены. Настройки TorrServer в Lampa плагин не меняет.
 
 Кнопка **Назад** из списка файлов возвращает к раздачам, из раздач — в меню. **Обновить список** перечитывает сервер. Раздачи добавляйте прежним способом через браузер. Плагин не добавляет и не удаляет раздачи. При открытии файлов сервер может активировать раздачу для получения метаданных.
@@ -29,7 +37,10 @@ GitHub описывает [публикацию Pages](https://docs.github.com/e
 | Признак | Что проверить |
 | --- | --- |
 | Красный значок, раздел не появился | Сначала проверьте HTTPS-адрес файла и перезапуск. По одному значку нельзя установить причину сбоя прежнего плагина. |
-| `MYTS-INIT` | За минуту не найден готовый интерфейс либо в сборке нет нужных JS API Lampa. |
+| `MYTS-JS 1.1.0` | Код новой версии начал выполняться. Если сообщения нет, ещё не подтверждён запуск JS; проверьте новый адрес и полный перезапуск. |
+| `MYTS-MENU 1.1.0` | Пункт добавлен. Ищите «Мои торренты» в боковом меню; также доступен запасной вход через настройки. |
+| `MYTS-HIDDEN 1.1.0` | Редактор меню скрывает пункт. Включите его через редактирование меню либо используйте вход через настройки. |
+| `MYTS-INIT`, `MYTS-SETTINGS`, `MYTS-API` | Откройте диагностику в настройках плагина и сообщите её текст. Поля показывают наличие API и меню в этой сборке. |
 | `MYTS-NET` | Доступ Apple TV к локальной сети и HTTP-серверу. CORS вашего TorrServer проверен; политика HTTP/mixed content внутри TestFlight-сборки не проверена. HTTPS-хостинг JS сам по себе не снимает эти ограничения. |
 | `MYTS-HTTP 401` | Сервер требует авторизацию; отдельной формы логина в плагине нет. |
 | `MYTS-TIMEOUT`, `MYTS-FILES` | Повторите запрос; проверьте, получила ли раздача метаданные в веб-интерфейсе TorrServer. |
@@ -41,6 +52,6 @@ GitHub описывает [публикацию Pages](https://docs.github.com/e
 
 - [TorrServer MatriX.137: `/torrents`](https://github.com/YouROK/TorrServer/blob/MatriX.137/server/web/api/torrents.go): JSON POST `{"action":"list"}`.
 - [TorrServer MatriX.137: `/stream`](https://github.com/YouROK/TorrServer/blob/MatriX.137/server/web/api/stream.go): GET `?link=<hash>&stat`, затем `/stream/<имя>?link=<hash>&index=<file.id>&play`. Индекс берётся из ответа сервера; файлы отбираются по расширению, что не является проверкой кодеков.
-- [Lampa: меню](https://github.com/yumata/lampa-source/blob/7a53473aa5d75793e5b80fb2edbb862c4440c79c/docs/en/09-manifest-menu.md), [окна выбора](https://github.com/yumata/lampa-source/blob/7a53473aa5d75793e5b80fb2edbb862c4440c79c/src/interaction/select.js), [сеть](https://github.com/yumata/lampa-source/blob/7a53473aa5d75793e5b80fb2edbb862c4440c79c/src/utils/reguest.js), [плеер](https://github.com/yumata/lampa-source/blob/7a53473aa5d75793e5b80fb2edbb862c4440c79c/src/interaction/player.js). Используются встроенные в Lampa jQuery, `Reguest.native`, `Select`, `Controller`, `Player.play`; `Player.playlist`, если доступен, ограничивает очередь выбранным файлом. Обращений к сторонним API нет.
+- [Lampa: меню](https://github.com/yumata/lampa-source/blob/7a53473aa5d75793e5b80fb2edbb862c4440c79c/src/interaction/menu/menu.js), [редактор меню](https://github.com/yumata/lampa-source/blob/7a53473aa5d75793e5b80fb2edbb862c4440c79c/src/interaction/menu/editor.js), [настройки](https://github.com/yumata/lampa-source/blob/7a53473aa5d75793e5b80fb2edbb862c4440c79c/src/interaction/settings/api.js), [окна выбора](https://github.com/yumata/lampa-source/blob/7a53473aa5d75793e5b80fb2edbb862c4440c79c/src/interaction/select.js), [сеть](https://github.com/yumata/lampa-source/blob/7a53473aa5d75793e5b80fb2edbb862c4440c79c/src/utils/reguest.js), [плеер](https://github.com/yumata/lampa-source/blob/7a53473aa5d75793e5b80fb2edbb862c4440c79c/src/interaction/player.js). Используются встроенные в Lampa jQuery, `Reguest.native`, `Select`, `Controller`, `Player.play`; `Player.playlist`, если доступен, ограничивает очередь выбранным файлом. Обращений к сторонним API нет.
 
 Если IP изменится, исправьте `SERVER_URL` в начале JS, загрузите файл заново и переустановите ссылку с новой меткой, например `?v=2`, затем полностью перезапустите приложение.

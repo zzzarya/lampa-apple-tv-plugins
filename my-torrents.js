@@ -1,5 +1,5 @@
 /*
- * My Torrents 1.1.0 — standalone Lampa plugin (ES5).
+ * My Torrents 1.2.0 — standalone Lampa plugin (ES5).
  * API checked against TorrServer MatriX.137 and public Lampa source.
  * Apple TV TestFlight execution has NOT been verified.
  * No remote dependencies, parser, torrent add/remove, or settings changes.
@@ -9,7 +9,7 @@
 
     // Change only this value if the local server address changes.
     var SERVER_URL = 'http://192.168.1.98:8090';
-    var VERSION = '1.1.0';
+    var VERSION = '1.2.0';
     var TITLE = 'Мои торренты';
     var KEY = '__lampa_my_torrents_137';
     var VIDEO = /\.(mkv|mp4|m4v|mov|avi|ts|m2ts|mts|webm|mpg|mpeg|m2v|vob|wmv|flv|ogv|3gp|3g2|divx)$/i;
@@ -75,6 +75,24 @@
         var i = 0;
         while (bytes >= 1024 && i < units.length - 1) { bytes /= 1024; i++; }
         return (i ? bytes.toFixed(1) : String(bytes)) + ' ' + units[i];
+    }
+
+    function timeLabel(seconds) {
+        seconds = Math.max(0, Math.floor(Number(seconds) || 0));
+        var h = Math.floor(seconds / 3600);
+        var m = Math.floor(seconds / 60) % 60;
+        var s = seconds % 60;
+        return (h ? h + ':' : '') + (m < 10 ? '0' : '') + m + ':' + (s < 10 ? '0' : '') + s;
+    }
+
+    function fileTimeline(torrent, file) {
+        if (!L.Timeline || typeof L.Timeline.view !== 'function') return null;
+        // Same decimal-string hash shape as Lampa.Utils.hash. Identity excludes the
+        // server URL and display title, so an IP/title change keeps the position.
+        var identity = 'my_ts137|' + torrent.hash.toLowerCase() + '|' + file.path;
+        var hash = 0;
+        for (var i = 0; i < identity.length; i++) hash = ((hash << 5) - hash + identity.charCodeAt(i)) | 0;
+        try { return L.Timeline.view(String(Math.abs(hash) || 1)); } catch (e) { return null; }
     }
 
     function backToMenu() {
@@ -217,9 +235,11 @@
             json.file_stats.forEach(function (file) {
                 if (!file || typeof file.path !== 'string' || !VIDEO.test(file.path)) return;
                 if (typeof file.id !== 'number' || file.id < 1 || file.id % 1 !== 0) return;
+                var timeline = fileTimeline(torrent, file);
+                var position = timeline && timeline.time > 0 ? ' · Позиция ' + timeLabel(timeline.time) : '';
                 items.push({
                     title: escapeHTML(file.path.split(/[\\/]/).pop()),
-                    subtitle: escapeHTML(sizeOf(file.length) + ' · ' + file.path),
+                    subtitle: escapeHTML(sizeOf(file.length) + position + ' · ' + file.path),
                     file: file
                 });
             });
@@ -241,9 +261,22 @@
                     // TorrServer settings, statistics or torrent search component.
                     backToMenu();
                     try {
-                        var media = { url: url, title: filename };
+                        var timeline = fileTimeline(torrent, file);
+                        var entry = { url: url, title: filename, id: file.id };
+                        var media = { url: url, title: filename, id: file.id };
+                        if (timeline) {
+                            entry.timeline = timeline;
+                            media.timeline = timeline;
+                        } else {
+                            notify('MYTS-TIMELINE: API таймкодов недоступен; видео откроется без сохранения позиции.');
+                        }
+                        // tvOS players receive serialized playlist entries. As in
+                        // Lampa's torrent component, use a separate entry to avoid
+                        // a circular media.playlist -> media reference.
+                        var playlist = [entry];
+                        media.playlist = playlist;
                         L.Player.play(media);
-                        if (typeof L.Player.playlist === 'function') L.Player.playlist([media]);
+                        if (typeof L.Player.playlist === 'function') L.Player.playlist(playlist);
                     } catch (e) {
                         errorBox('MYTS-PLAYER: ' + String(e.message || e), retry, back);
                     }

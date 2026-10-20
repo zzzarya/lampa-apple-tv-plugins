@@ -1,17 +1,18 @@
 /*
- * My Torrents 1.3.0 — standalone Lampa plugin (ES5).
+ * My Torrents 1.4.0 — standalone Lampa plugin (ES5).
  * API checked against TorrServer MatriX.137 and public Lampa source.
  * Menu/playback confirmed on Lampa MX 0.2 (610); new features need device testing.
- * No remote dependencies, parser, torrent add/remove, or settings changes.
+ * Uses Lampa's own catalogue/loading APIs; no bundled keys or remote JS.
  */
 (function (w) {
     'use strict';
 
     // Change only this value if the local server address changes.
     var SERVER_URL = 'http://192.168.1.98:8090';
-    var VERSION = '1.3.0';
+    var VERSION = '1.4.0';
     var TITLE = 'Мои торренты';
     var KEY = '__lampa_my_torrents_137';
+    var CARD_KEY = 'my_ts137_cards_v1';
     var VIDEO = /\.(mkv|mp4|m4v|mov|avi|ts|m2ts|mts|webm|mpg|mpeg|m2v|vob|wmv|flv|ogv|3gp|3g2|divx)$/i;
     var L, $, attempts = 0, timer, noticeTimer, checkTimer;
     var followed, appReady = false, returnController = 'menu', reported = false;
@@ -56,6 +57,9 @@
             ', скрыто=' + (button && button.hasClass('hidden') ? 'да' : 'нет') +
             ', настройки=' + (state.settings ? 'да' : 'нет') +
             ', Player=' + (L && L.Player && typeof L.Player.play === 'function' ? 'да' : 'нет') +
+            ', Loading=' + (L && L.Loading && typeof L.Loading.start === 'function' ? 'да' : 'нет') +
+            ', каталог=' + (L && catalogAvailable() ? 'да' : 'нет') +
+            ', сезоны=' + (L && L.Api && typeof L.Api.seasons === 'function' ? 'да' : 'нет') +
             ', интерфейс=' + (L && L.Manifest ? L.Manifest.app_version || '?' : '?');
     }
 
@@ -87,7 +91,155 @@
     }
 
     function torrentTitle(torrent) {
+        var card = cardFor(torrent);
+        if (card) return card.title;
         return cleanName(nameOf(torrent)).replace(/(?:^|\s)S\d{1,3}(?:\s*-\s*S?\d{1,3})?(?=\s|$)/ig, '').replace(/\s+/g, ' ').trim() || nameOf(torrent);
+    }
+
+    function smallCard(raw, type) {
+        if (!raw || !(Number(raw.id) > 0) || !isFinite(Number(raw.id)) || !(raw.title || raw.name)) return null;
+        type = type || raw.type || (raw.number_of_seasons || raw.first_air_date || raw.original_name || (raw.name && !raw.title) ? 'tv' : 'movie');
+        return {
+            id: Number(raw.id), type: type === 'tv' ? 'tv' : 'movie',
+            source: raw.source === 'cub' ? 'cub' : 'tmdb',
+            title: String(raw.title || raw.name),
+            original_title: String(raw.original_title || raw.original_name || raw.title || raw.name)
+        };
+    }
+
+    function cardFor(torrent) {
+        try {
+            var saved = L.Storage && L.Storage.get(CARD_KEY, {});
+            var key = torrent.hash.toLowerCase();
+            if (saved && Object.prototype.hasOwnProperty.call(saved, key)) return smallCard(saved[key]);
+            var data = typeof torrent.data === 'string' ? JSON.parse(torrent.data) : torrent.data;
+            return data && data.lampa ? smallCard(data.movie) : null;
+        } catch (e) { return null; }
+    }
+
+    function saveCard(torrent, card) {
+        var saved = L.Storage.get(CARD_KEY, {}), next = {};
+        if (saved && typeof saved === 'object') {
+            for (var key in saved) if (Object.prototype.hasOwnProperty.call(saved, key)) next[key] = saved[key];
+        }
+        // false also disables an automatically imported card from torrent.data.
+        next[torrent.hash.toLowerCase()] = card || false;
+        L.Storage.set(CARD_KEY, next);
+    }
+
+    function catalogAvailable() {
+        return L.Api && typeof L.Api.search === 'function' && L.Storage &&
+            typeof L.Storage.get === 'function' && typeof L.Storage.set === 'function';
+    }
+
+    function catalogWait(title, start, done, back) {
+        if (state.cancelCatalog) state.cancelCatalog();
+        var alive = true, timeout;
+        function stop() {
+            if (!alive) return false;
+            alive = false;
+            w.clearTimeout(timeout);
+            if (state.cancelCatalog === stop) state.cancelCatalog = null;
+            L.Select.close();
+            return true;
+        }
+        function cancel() { if (stop()) back(); }
+        function complete(result) { if (stop()) done(result); }
+        state.cancelCatalog = stop;
+        L.Select.show({ title: title, items: [
+            { title: 'Загрузка каталога…', noenter: true }, { title: 'Отмена' }
+        ], onSelect: cancel, onBack: cancel });
+        timeout = w.setTimeout(function () { complete(null); }, 15000);
+        try { start(complete); } catch (e) { complete(null); }
+    }
+
+    function chooseCard(torrent, reload, back) {
+        var query = torrentTitle(torrent);
+        function search(value) {
+            query = String(value || '').trim();
+            if (!query) return menu();
+            catalogWait('Поиск карточки', function (complete) {
+                L.Api.search({ query: query, page: 1 }, complete);
+            }, function (json) {
+                var items = [];
+                ['movie', 'tv'].forEach(function (type) {
+                    var group = json && json[type];
+                    if (!group || !Array.isArray(group.results)) return;
+                    group.results.forEach(function (raw) {
+                        var card = smallCard(raw, type);
+                        if (!card) return;
+                        var year = String(raw.release_date || raw.first_air_date || '').slice(0, 4);
+                        items.push({ title: escapeHTML(card.title), subtitle: escapeHTML(
+                            (type === 'tv' ? 'Сериал' : 'Фильм') + (year ? ' · ' + year : '') + ' · ' + card.original_title), card: card });
+                    });
+                });
+                if (!items.length) items.push({ title: json ? 'Ничего не найдено.' : 'Каталог не ответил.', noenter: true });
+                items.push({ title: 'Изменить запрос', action: 'query' });
+                items.push({ title: 'Назад', action: 'back' });
+                L.Select.show({ title: 'Выберите карточку: ' + query, items: items,
+                    onSelect: function (item) {
+                        if (item.action === 'query') edit();
+                        else if (item.action === 'back') menu();
+                        else {
+                            try { saveCard(torrent, item.card); reload(); }
+                            catch (e) { notify('MYTS-CARD: не удалось сохранить привязку.'); back(); }
+                        }
+                    }, onBack: menu });
+            }, menu);
+        }
+        function edit() {
+            if (!L.Input || typeof L.Input.edit !== 'function') {
+                notify('MYTS-CARD: экранный ввод недоступен в этой сборке.');
+                return menu();
+            }
+            L.Input.edit({ title: 'Название фильма или сериала', value: query, free: true, nosave: true }, search);
+        }
+        function menu() {
+            var card = cardFor(torrent);
+            var items = [{ title: 'Найти: ' + escapeHTML(query), action: 'search' },
+                { title: 'Ввести другое название', action: 'query' }];
+            if (card) items.push({ title: 'Снять привязку: ' + escapeHTML(card.title), action: 'clear' });
+            items.push({ title: 'Назад', action: 'back' });
+            L.Select.show({ title: 'Карточка фильма или сериала', items: items,
+                onSelect: function (item) {
+                    if (item.action === 'search') search(query);
+                    else if (item.action === 'query') edit();
+                    else if (item.action === 'clear') {
+                        try { saveCard(torrent, null); reload(); }
+                        catch (e) { notify('MYTS-CARD: не удалось снять привязку.'); back(); }
+                    } else back();
+                }, onBack: back });
+        }
+        menu();
+    }
+
+    function showMedia(torrent, files, back) {
+        var videos = videoFiles(torrent, files), card = cardFor(torrent), seasons = [];
+        function show() { showVideos(torrent, videos, back); }
+        if (!card) return show();
+        if (card.type === 'movie') {
+            if (videos.length === 1) videos[0].title = card.title;
+            return show();
+        }
+        videos.forEach(function (video) {
+            if (video.season !== null && seasons.indexOf(video.season) < 0) seasons.push(video.season);
+        });
+        if (!seasons.length || !L.Api || typeof L.Api.seasons !== 'function') return show();
+        catalogWait('Названия серий: ' + card.title, function (complete) {
+            L.Api.seasons(card, seasons, complete);
+        }, function (data) {
+            if (!data) notify('MYTS-CATALOG: каталог не ответил; используются имена файлов.');
+            videos.forEach(function (video) {
+                var season = data && data[video.season];
+                if (!season || !Array.isArray(season.episodes) || video.episode === null || video.end !== null) return;
+                season.episodes.some(function (episode) {
+                    if (Number(episode.episode_number) !== video.episode || !episode.name) return false;
+                    video.title = video.episode + ' серия — ' + String(episode.name);
+                    return true;
+                });
+            });
+            show();
+        }, back);
     }
 
     function seasonIn(text) {
@@ -118,9 +270,20 @@
             if (match) episode = Number(match[1]);
         }
         var episodeName = match ? cleanName(stem.slice(match.index + match[0].length)) : '';
+        var card = cardFor(torrent);
+        if (card && card.type === 'tv' && L.Torserver && typeof L.Torserver.parse === 'function') {
+            try {
+                var parsed = L.Torserver.parse({ movie: { number_of_seasons: 1 }, filename: cleanName(stem),
+                    path: file.path.replace(/\\/g, '/'), files: [] });
+                if (episode === null && parsed.episode > 0) episode = parsed.episode;
+                // The core defaults missing seasons to 1 for TV. Accept only
+                // explicit season markers, preserving our unknown-season group.
+                if (season === null && parsed.season >= 0 && /(?:^|[\s._/\-])(?:s\d+|season[\s._-]*\d|сезон[\s._-]*\d)|\d[\s._-]*сезон/i.test(file.path)) season = parsed.season;
+            } catch (e) { /* Keep the independent filename parser. */ }
+        }
         var title = episode !== null ? (end ? episode + '–' + end + ' серии' : episode + ' серия') +
             (episodeName ? ' — ' + episodeName : '') : cleanName(stem) || stem;
-        return { file: file, season: season, episode: episode, title: title };
+        return { file: file, season: season, episode: episode, end: end, title: title };
     }
 
     function naturalKey(value) {
@@ -166,6 +329,8 @@
         };
         if (video.season !== null) entry.season = video.season;
         if (video.episode !== null) entry.episode = video.episode;
+        var card = cardFor(torrent);
+        if (card) { entry.card = card; entry.first_title = card.title; }
         var timeline = fileTimeline(torrent, file);
         if (timeline) entry.timeline = timeline;
         return entry;
@@ -181,25 +346,157 @@
             for (var key in entry) if (Object.prototype.hasOwnProperty.call(entry, key)) media[key] = entry[key];
             if (!media.timeline) notify('MYTS-TIMELINE: API таймкодов недоступен; видео откроется без сохранения позиции.');
             media.playlist = playlist;
-            L.Player.play(media);
-            if (typeof L.Player.playlist === 'function') L.Player.playlist(playlist);
+            prepareVideo(media, function () {
+                try {
+                    L.Player.play(media);
+                    if (typeof L.Player.playlist === 'function') L.Player.playlist(playlist);
+                } catch (e) { errorBox('MYTS-PLAYER: ' + String(e.message || e), retry, back); }
+            }, retry);
         } catch (e) {
             errorBox('MYTS-PLAYER: ' + String(e.message || e), retry, back);
         }
     }
 
+    function prepareVideo(media, run, back) {
+        if (state.cancelPreload) state.cancelPreload();
+        var starter = new L.Reguest(), polling = new L.Reguest();
+        var stopped = false, pollTimer, deadline, failures = 0, nativeUI = false, panel, serial = 0;
+        var statURL = media.url.replace(/&play$/, '&stat');
+        function freshStat() { return statURL + '&_myts=' + Date.now() + '-' + (++serial); }
+
+        function stop() {
+            if (stopped) return false;
+            stopped = true;
+            w.clearTimeout(pollTimer);
+            w.clearTimeout(deadline);
+            starter.clear();
+            polling.clear();
+            if (state.cancelPreload === stop) state.cancelPreload = null;
+            if (nativeUI) { try { L.Loading.stop(); } catch (e) { /* Cleanup still suppresses callbacks. */ } }
+            else L.Select.close();
+            return true;
+        }
+        function cancel() { if (stop()) back(); }
+        function finish() { if (stop()) run(); }
+        function fail(message) {
+            if (!stop()) return;
+            L.Select.show({
+                title: 'Подготовка видео',
+                items: [
+                    { title: escapeHTML(message), noenter: true },
+                    { title: 'Повторить', action: 'retry' },
+                    { title: 'Открыть без ожидания', action: 'play' },
+                    { title: 'Назад', action: 'back' }
+                ],
+                onSelect: function (item) {
+                    if (item.action === 'retry') prepareVideo(media, run, back);
+                    else if (item.action === 'play') run();
+                    else back();
+                },
+                onBack: back
+            });
+        }
+        function update(json, completed) {
+            if (stopped) return;
+            try { if (typeof json === 'string') json = JSON.parse(json); } catch (e) { json = null; }
+            if (!json || typeof json.stat !== 'number') return fail('MYTS-PRELOAD: сервер не вернул статистику буфера.');
+            failures = 0;
+            function number(value) { value = Number(value); return isFinite(value) && value > 0 ? value : 0; }
+            var loaded = number(json.preloaded_bytes), total = number(json.preload_size);
+            var progress = total ? Math.max(0, Math.min(100, loaded * 100 / total)) : 0;
+            var detail = {
+                speed: (sizeOf(number(json.download_speed)) || '0 Б') + '/с',
+                active_peers: Math.floor(number(json.active_peers)),
+                total_peers: Math.floor(number(json.total_peers))
+            };
+            var text = (total ? Math.floor(progress) + '% · ' + (sizeOf(loaded) || '0 Б') + ' / ' + sizeOf(total) : 'Подготовка буфера…') +
+                ' · ' + detail.speed + ' · Пиры: ' + detail.active_peers + ' / ' + detail.total_peers;
+            if (nativeUI) {
+                if (typeof L.Loading.setProgress === 'function') L.Loading.setProgress(progress, detail);
+                else L.Loading.setText(text);
+            } else {
+                panel.find('.my-ts-preload-text').text(text);
+                panel.find('.my-ts-preload-bar').css('width', progress + '%');
+                panel.find('[role="progressbar"]').attr('aria-valuenow', Math.floor(progress));
+            }
+            // Same 95% threshold as Lampa. A completed preload with no buffer
+            // target also covers disabled preloading in TorrServer settings.
+            if ((total && progress >= 95) || (completed && json.stat === 3)) finish();
+        }
+        function poll() {
+            if (stopped) return;
+            polling.clear();
+            try { polling.native(freshStat(), function (json) {
+                update(json, false);
+                if (!stopped) pollTimer = w.setTimeout(poll, 1000);
+            }, function (xhr) {
+                if (stopped) return;
+                if (++failures >= 3 || (xhr && xhr.status === 401)) fail(networkError(xhr));
+                else pollTimer = w.setTimeout(poll, 1000);
+            }, false, { dataType: 'json', timeout: 5000, cache: false });
+            } catch (e) { fail('MYTS-PRELOAD: ' + String(e.message || e)); }
+        }
+
+        state.cancelPreload = stop;
+        if (L.Loading && typeof L.Loading.start === 'function' && typeof L.Loading.stop === 'function' &&
+            (typeof L.Loading.setProgress === 'function' || typeof L.Loading.setText === 'function')) {
+            try {
+                nativeUI = true;
+                L.Loading.start(cancel, 'Подготовка видео…', { media: media, progress: 0 });
+            } catch (e) {
+                try { L.Loading.stop(); } catch (ignored) { /* Use local picker. */ }
+                nativeUI = false;
+            }
+        }
+        if (!nativeUI) {
+            panel = $('<div class="selectbox-item"><div class="my-ts-preload-text"></div>' +
+                '<div role="progressbar" aria-valuemin="0" aria-valuemax="100" aria-valuenow="0" style="height:8px;background:#555;margin-top:12px">' +
+                '<div class="my-ts-preload-bar" style="height:100%;width:0;background:#fff"></div></div></div>');
+            panel.find('.my-ts-preload-text').text('Подготовка буфера…');
+            L.Select.show({ title: 'Подготовка видео', items: [
+                { title: 'Подготовка буфера…', html: panel, noenter: true }, { title: 'Отмена' }
+            ], onSelect: cancel, onBack: cancel });
+        }
+        deadline = w.setTimeout(function () { fail('MYTS-PRELOAD: за две минуты буфер не подготовлен.'); }, 120000);
+        pollTimer = w.setTimeout(poll, 1000);
+        // MatriX.137 handles preload synchronously. Poll with a separate request
+        // while this request is filling the buffer; never repeat the preload.
+        try {
+            starter.native(freshStat() + '&preload', function (json) { update(json, true); }, function (xhr) {
+                if (!stopped && xhr && xhr.status >= 400) fail(networkError(xhr));
+                // A transport timeout does not prove the server stopped. Poll
+                // until ready, cancelled, or the bounded deadline expires.
+            }, false, { dataType: 'json', timeout: 90000, cache: false });
+        } catch (e) { fail('MYTS-PRELOAD: ' + String(e.message || e)); }
+    }
+
     function showVideos(torrent, videos, back, season) {
         var groups = [];
         var hasSeasons = videos.some(function (video) { return video.season !== null; });
+        function link() {
+            chooseCard(torrent, function () {
+                showMedia(torrent, videos.map(function (video) { return video.file; }), back);
+            }, retry);
+        }
+        function addCardAction(items) {
+            if (!catalogAvailable()) return;
+            var card = cardFor(torrent);
+            items.push({ title: card ? 'Карточка: ' + escapeHTML(card.title) : 'Выбрать карточку фильма или сериала', action: 'card' });
+        }
         videos.forEach(function (video) { if (groups.indexOf(video.season) < 0) groups.push(video.season); });
         if (hasSeasons && typeof season === 'undefined') {
+            var seasonItems = groups.map(function (number) {
+                var count = videos.filter(function (video) { return video.season === number; }).length;
+                return { title: seasonTitle(number), subtitle: 'Видеофайлов: ' + count, season: number };
+            });
+            addCardAction(seasonItems);
             L.Select.show({
                 title: torrentTitle(torrent),
-                items: groups.map(function (number) {
-                    var count = videos.filter(function (video) { return video.season === number; }).length;
-                    return { title: seasonTitle(number), subtitle: 'Видеофайлов: ' + count, season: number };
-                }),
-                onSelect: function (item) { showVideos(torrent, videos, back, item.season); },
+                items: seasonItems,
+                onSelect: function (item) {
+                    if (item.action === 'card') link();
+                    else showVideos(torrent, videos, back, item.season);
+                },
                 onBack: back
             });
             return;
@@ -222,11 +519,13 @@
             items.push({ title: 'В раздаче нет видео с поддержанным расширением.', noenter: true });
             items.push({ title: 'Назад', action: 'back' });
         }
+        addCardAction(items);
         L.Select.show({
             title: torrentTitle(torrent) + (hasSeasons ? ' · ' + seasonTitle(season) : ''),
             items: items,
             onSelect: function (item) {
                 if (item.action === 'back') return listBack();
+                if (item.action === 'card') return link();
                 playVideo(torrent, videos, item.video, retry, listBack);
             },
             onBack: listBack
@@ -395,7 +694,7 @@
                 errorBox('MYTS-FILES: сервер не вернул file_stats. Повторите запрос.', retry, back);
                 return;
             }
-            showVideos(torrent, videoFiles(torrent, json.file_stats), back);
+            showMedia(torrent, json.file_stats, back);
         }, retry, back);
     }
 
@@ -512,6 +811,8 @@
     state.refresh = boot;
     state.dispose = function () {
         state.disposed = true;
+        if (state.cancelPreload) state.cancelPreload();
+        if (state.cancelCatalog) state.cancelCatalog();
         w.clearTimeout(timer);
         w.clearTimeout(noticeTimer);
         w.clearTimeout(checkTimer);

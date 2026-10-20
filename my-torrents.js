@@ -1,7 +1,7 @@
 /*
- * My Torrents 1.2.0 — standalone Lampa plugin (ES5).
+ * My Torrents 1.3.0 — standalone Lampa plugin (ES5).
  * API checked against TorrServer MatriX.137 and public Lampa source.
- * Apple TV TestFlight execution has NOT been verified.
+ * Menu/playback confirmed on Lampa MX 0.2 (610); new features need device testing.
  * No remote dependencies, parser, torrent add/remove, or settings changes.
  */
 (function (w) {
@@ -9,7 +9,7 @@
 
     // Change only this value if the local server address changes.
     var SERVER_URL = 'http://192.168.1.98:8090';
-    var VERSION = '1.2.0';
+    var VERSION = '1.3.0';
     var TITLE = 'Мои торренты';
     var KEY = '__lampa_my_torrents_137';
     var VIDEO = /\.(mkv|mp4|m4v|mov|avi|ts|m2ts|mts|webm|mpg|mpeg|m2v|vob|wmv|flv|ogv|3gp|3g2|divx)$/i;
@@ -67,6 +67,170 @@
 
     function nameOf(torrent) {
         return String(torrent.title || torrent.name || torrent.hash || 'Без названия');
+    }
+
+    function trimName(value) {
+        var text = value.replace(/[._]+/g, ' ').replace(/\s+/g, ' ')
+            .replace(/^[\s\-–—:|,]+|[\s\-–—:|,]+$/g, '');
+        var pairs = { '[': ']', '(': ')', '"': '"', '«': '»' };
+        while (text.length > 1 && pairs[text.charAt(0)] === text.charAt(text.length - 1)) text = text.slice(1, -1).trim();
+        return text;
+    }
+
+    function cleanName(value) {
+        var text = String(value).replace(VIDEO, '').replace(/^\[LAMPA\]\s*/i, '');
+        // Cut a release suffix only at a known technical token. Years and
+        // ordinary words stay; no online catalogue or translation is guessed.
+        var noise = /(?:^|[\s._\[\]()\-])(?:2160p|1080[pi]|720p|480p|4k|uhd|blu[ .-]?ray|bdremux|bdrip|brrip|web[ .-]?(?:dl|rip)|hdtv|dvdrip|remux|x26[45]|h[ .-]?26[45]|hevc|avc|av1|atvp|amzn|dsnp|sdr|hdr(?:10\+?)?|dovi|aac|ac3|eac3|dts|truehd)(?=$|[\s._\[\]()\-])/i.exec(text);
+        if (noise) text = text.slice(0, noise.index);
+        return trimName(text);
+    }
+
+    function torrentTitle(torrent) {
+        return cleanName(nameOf(torrent)).replace(/(?:^|\s)S\d{1,3}(?:\s*-\s*S?\d{1,3})?(?=\s|$)/ig, '').replace(/\s+/g, ' ').trim() || nameOf(torrent);
+    }
+
+    function seasonIn(text) {
+        var match = /(?:^|[\s._\[()\-])(?:s|season|сезон)[\s._-]*(\d{1,3})(?=$|[\s._\])\-])/i.exec(text) ||
+            /(?:^|[\s._\[()\-])(\d{1,3})[\s._-]*сезон(?=$|[\s._\])\-])/i.exec(text);
+        if (match && /^\s*-\s*s?\d{1,3}(?=$|[^\d])/i.test(text.slice(match.index + match[0].length))) return null;
+        return match ? Number(match[1]) : null;
+    }
+
+    function describeFile(torrent, file) {
+        var parts = file.path.split(/[\\/]/);
+        var stem = parts.pop().replace(VIDEO, '');
+        var season = null, episode = null, end = null, match;
+        match = /(?:^|[\s._\[()\-])s(\d{1,3})[\s._-]*e(\d{1,4})(?:(?:[\s._]*e|-e?)(\d{1,4}))?(?=$|[\s._\])\-])/i.exec(stem) ||
+            /(?:^|[\s._\[()\-])(\d{1,3})x(\d{1,4})(?:-(\d{1,4}))?(?=$|[\s._\])\-])/i.exec(stem);
+        if (match) {
+            season = Number(match[1]);
+            episode = Number(match[2]);
+            if (match[3] && Number(match[3]) > episode) end = Number(match[3]);
+        } else {
+            season = seasonIn(stem);
+            for (var i = parts.length - 1; season === null && i >= 0; i--) season = seasonIn(parts[i]);
+            if (season === null) season = seasonIn(nameOf(torrent));
+            match = /(?:^|[\s._\[()\-])(?:серия|эпизод|episode|ep|e)[\s._#-]*(\d{1,4})(?=$|[\s._\])\-])/i.exec(stem) ||
+                /(?:^|[\s._\[()\-])(\d{1,4})[\s._-]*(?:серия|эпизод)(?=$|[\s._\])\-])/i.exec(stem);
+            // A numeric film title (e.g. 12 Monkeys) is not an episode marker.
+            if (!match && season !== null) match = /^\s*(\d{1,3})(?=$|[\s._)\-])/.exec(stem);
+            if (match) episode = Number(match[1]);
+        }
+        var episodeName = match ? cleanName(stem.slice(match.index + match[0].length)) : '';
+        var title = episode !== null ? (end ? episode + '–' + end + ' серии' : episode + ' серия') +
+            (episodeName ? ' — ' + episodeName : '') : cleanName(stem) || stem;
+        return { file: file, season: season, episode: episode, title: title };
+    }
+
+    function naturalKey(value) {
+        return value.toLowerCase().replace(/\d+/g, function (n) { return ('0000000000' + n).slice(-10); });
+    }
+
+    function videoFiles(torrent, stats) {
+        var videos = [];
+        stats.forEach(function (file) {
+            if (!file || typeof file.path !== 'string' || !VIDEO.test(file.path)) return;
+            if (typeof file.id !== 'number' || file.id < 1 || file.id % 1 !== 0) return;
+            videos.push(describeFile(torrent, file));
+        });
+        videos.sort(function (a, b) {
+            var seasonA = a.season === null ? Infinity : a.season;
+            var seasonB = b.season === null ? Infinity : b.season;
+            if (seasonA !== seasonB) return seasonA - seasonB;
+            var episodeA = a.episode === null ? Infinity : a.episode;
+            var episodeB = b.episode === null ? Infinity : b.episode;
+            if (episodeA !== episodeB) return episodeA - episodeB;
+            var left = naturalKey(a.file.path), right = naturalKey(b.file.path);
+            return left < right ? -1 : left > right ? 1 : a.file.id - b.file.id;
+        });
+        return videos;
+    }
+
+    function seasonTitle(season) {
+        return season === null ? 'Без указанного сезона' : season === 0 ? 'Спецвыпуски (сезон 0)' : 'Сезон ' + season;
+    }
+
+    function playerEntry(torrent, video) {
+        var file = video.file;
+        var filename = file.path.split(/[\\/]/).pop();
+        var title = (video.season !== null ? seasonTitle(video.season) + ' · ' : '') + video.title;
+        // Player playlists may interpolate titles as HTML. Use plain visible
+        // angle glyphs; the picker separately escapes its title and path.
+        title = title.replace(/</g, '‹').replace(/>/g, '›').replace(/[\x00-\x1f]/g, ' ');
+        var entry = {
+            url: SERVER_URL + '/stream/' + encodeURIComponent(filename) +
+                '?link=' + encodeURIComponent(torrent.hash) + '&index=' + file.id + '&play',
+            title: title,
+            id: file.id
+        };
+        if (video.season !== null) entry.season = video.season;
+        if (video.episode !== null) entry.episode = video.episode;
+        var timeline = fileTimeline(torrent, file);
+        if (timeline) entry.timeline = timeline;
+        return entry;
+    }
+
+    function playVideo(torrent, videos, chosen, retry, back) {
+        backToMenu();
+        try {
+            // Include every video, even when browsing one season. Copy the
+            // selected entry before assigning playlist to avoid circular JSON.
+            var playlist = videos.map(function (video) { return playerEntry(torrent, video); });
+            var entry = playlist[videos.indexOf(chosen)], media = {};
+            for (var key in entry) if (Object.prototype.hasOwnProperty.call(entry, key)) media[key] = entry[key];
+            if (!media.timeline) notify('MYTS-TIMELINE: API таймкодов недоступен; видео откроется без сохранения позиции.');
+            media.playlist = playlist;
+            L.Player.play(media);
+            if (typeof L.Player.playlist === 'function') L.Player.playlist(playlist);
+        } catch (e) {
+            errorBox('MYTS-PLAYER: ' + String(e.message || e), retry, back);
+        }
+    }
+
+    function showVideos(torrent, videos, back, season) {
+        var groups = [];
+        var hasSeasons = videos.some(function (video) { return video.season !== null; });
+        videos.forEach(function (video) { if (groups.indexOf(video.season) < 0) groups.push(video.season); });
+        if (hasSeasons && typeof season === 'undefined') {
+            L.Select.show({
+                title: torrentTitle(torrent),
+                items: groups.map(function (number) {
+                    var count = videos.filter(function (video) { return video.season === number; }).length;
+                    return { title: seasonTitle(number), subtitle: 'Видеофайлов: ' + count, season: number };
+                }),
+                onSelect: function (item) { showVideos(torrent, videos, back, item.season); },
+                onBack: back
+            });
+            return;
+        }
+        function listBack() { if (hasSeasons) showVideos(torrent, videos, back); else back(); }
+        function retry() { showVideos(torrent, videos, back, season); }
+        var items = [];
+        videos.forEach(function (video) {
+            if (hasSeasons && video.season !== season) return;
+            var timeline = fileTimeline(torrent, video.file);
+            var position = timeline && timeline.time > 0 ? ' · Позиция ' + timeLabel(timeline.time) : '';
+            items.push({
+                title: escapeHTML(video.title),
+                subtitle: escapeHTML(sizeOf(video.file.length) + position + ' · ' + video.file.path),
+                file: video.file,
+                video: video
+            });
+        });
+        if (!items.length) {
+            items.push({ title: 'В раздаче нет видео с поддержанным расширением.', noenter: true });
+            items.push({ title: 'Назад', action: 'back' });
+        }
+        L.Select.show({
+            title: torrentTitle(torrent) + (hasSeasons ? ' · ' + seasonTitle(season) : ''),
+            items: items,
+            onSelect: function (item) {
+                if (item.action === 'back') return listBack();
+                playVideo(torrent, videos, item.video, retry, listBack);
+            },
+            onBack: listBack
+        });
     }
 
     function sizeOf(bytes) {
@@ -185,7 +349,7 @@
         torrents.forEach(function (torrent) {
             if (!torrent || !/^[a-f0-9]{40}$/i.test(torrent.hash || '')) return;
             items.push({
-                title: escapeHTML(nameOf(torrent)),
+                title: escapeHTML(torrentTitle(torrent)),
                 subtitle: escapeHTML(sizeOf(torrent.torrent_size)),
                 torrent: torrent
             });
@@ -231,58 +395,7 @@
                 errorBox('MYTS-FILES: сервер не вернул file_stats. Повторите запрос.', retry, back);
                 return;
             }
-            var items = [];
-            json.file_stats.forEach(function (file) {
-                if (!file || typeof file.path !== 'string' || !VIDEO.test(file.path)) return;
-                if (typeof file.id !== 'number' || file.id < 1 || file.id % 1 !== 0) return;
-                var timeline = fileTimeline(torrent, file);
-                var position = timeline && timeline.time > 0 ? ' · Позиция ' + timeLabel(timeline.time) : '';
-                items.push({
-                    title: escapeHTML(file.path.split(/[\\/]/).pop()),
-                    subtitle: escapeHTML(sizeOf(file.length) + position + ' · ' + file.path),
-                    file: file
-                });
-            });
-            if (!items.length) {
-                items.push({ title: 'В раздаче нет видео с поддержанным расширением.', noenter: true });
-                items.push({ title: 'Назад', action: 'back' });
-            }
-            L.Select.show({
-                title: nameOf(torrent),
-                items: items,
-                onSelect: function (item) {
-                    if (item.action === 'back') return back();
-                    var file = item.file;
-                    var filename = file.path.split(/[\\/]/).pop();
-                    var url = SERVER_URL + '/stream/' + encodeURIComponent(filename) +
-                        '?link=' + encodeURIComponent(torrent.hash) + '&index=' + file.id + '&play';
-                    // Direct media playback through Lampa's existing player routing.
-                    // No torrent_hash: this does not depend on Lampa's global
-                    // TorrServer settings, statistics or torrent search component.
-                    backToMenu();
-                    try {
-                        var timeline = fileTimeline(torrent, file);
-                        var entry = { url: url, title: filename, id: file.id };
-                        var media = { url: url, title: filename, id: file.id };
-                        if (timeline) {
-                            entry.timeline = timeline;
-                            media.timeline = timeline;
-                        } else {
-                            notify('MYTS-TIMELINE: API таймкодов недоступен; видео откроется без сохранения позиции.');
-                        }
-                        // tvOS players receive serialized playlist entries. As in
-                        // Lampa's torrent component, use a separate entry to avoid
-                        // a circular media.playlist -> media reference.
-                        var playlist = [entry];
-                        media.playlist = playlist;
-                        L.Player.play(media);
-                        if (typeof L.Player.playlist === 'function') L.Player.playlist(playlist);
-                    } catch (e) {
-                        errorBox('MYTS-PLAYER: ' + String(e.message || e), retry, back);
-                    }
-                },
-                onBack: back
-            });
+            showVideos(torrent, videoFiles(torrent, json.file_stats), back);
         }, retry, back);
     }
 
